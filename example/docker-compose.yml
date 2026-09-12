@@ -1,0 +1,25 @@
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_PASSWORD: authz
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - ../schema/001_authz.sql:/docker-entrypoint-initdb.d/01_authz.sql:ro
+      - ../schema/002_seed_function.sql:/docker-entrypoint-initdb.d/02_seed_function.sql:ro
+      - ./seed.sql:/docker-entrypoint-initdb.d/03_seed.sql:ro
+  api:
+    build:
+      context: ..
+      dockerfile: example/Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:authz@db:5432/postgres
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy

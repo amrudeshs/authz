@@ -1,0 +1,48 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Projects & Tasks — authz example",
+    "version": "1.0.0",
+    "description": "A minimal multi-tenant API (workspaces, projects, tasks, roles) demonstrating function-level authorization with the authz module."
+  },
+  "x-role-seed": {
+    "editor": [
+      "listProjects", "createProject", "getProject",
+      "listTasks", "createTask", "completeTask",
+      "listRoles"
+    ],
+    "member": [
+      "listProjects", "getProject", "listTasks", "listRoles"
+    ]
+  },
+  "paths": {
+    "/health": {
+      "get": { "operationId": "health", "x-public": true }
+    },
+    "/projects": {
+      "get": { "operationId": "listProjects" },
+      "post": { "operationId": "createProject" }
+    },
+    "/projects/{id}": {
+      "get": { "operationId": "getProject" },
+      "delete": { "operationId": "deleteProject" }
+    },
+    "/projects/{id}/tasks": {
+      "get": { "operationId": "listTasks" },
+      "post": { "operationId": "createTask" }
+    },
+    "/tasks/{id}/complete": {
+      "post": { "operationId": "completeTask" }
+    },
+    "/roles": {
+      "get": { "operationId": "listRoles" },
+      "post": { "operationId": "createRole" }
+    },
+    "/roles/{slug}/permissions": {
+      "post": { "operationId": "setRolePermission" }
+    },
+    "/members/{userId}/roles/{slug}": {
+      "post": { "operationId": "assignRole" }
+    }
+  }
+}

@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+      - name: vet
+        run: go vet ./...
+      - name: test
+        run: go test ./...
+      - name: generated code is current
+        run: |
+          go run ./cmd/permgen -spec example/openapi.json -out example/perm_gen.go -package main
+          git diff --exit-code
+      - name: no proprietary terminology
+        run: |
+          if grep -rniE '\bdeny1\b|deny2' --exclude-dir=.git --exclude-dir=.github .; then
+            echo "::error::proprietary terminology found in the public tree"
+            exit 1
+          fi
+
+  schema:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: authz
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: apply the reference schema + seed to a clean database
+        env:
+          PGPASSWORD: authz
+        run: |
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f schema/001_authz.sql
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f schema/002_seed_function.sql
+          psql -h localhost -U postgres -v ON_ERROR_STOP=1 -f example/seed.sql
+          psql -h localhost -U postgres -tAc "SELECT count(*) FROM roles" | grep -qx 6

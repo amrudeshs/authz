@@ -14,7 +14,8 @@
 --
 -- Running it again resets the system roles' permissions to exactly the
 -- matrix (so it is safe after test truncations or a vocabulary change).
--- Custom roles are never touched. The wildcard admin role holds no rows.
+-- Custom roles are never touched. Include the wildcard role with an empty
+-- array so its (row-less) role row exists for membership binding.
 
 CREATE OR REPLACE FUNCTION seed_role_permissions(seed jsonb)
 RETURNS void AS $$

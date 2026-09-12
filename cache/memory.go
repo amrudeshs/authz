@@ -65,3 +65,11 @@ func (c *Memory) Del(_ context.Context, key string) {
 	defer c.mu.Unlock()
 	delete(c.m, key)
 }
+
+// Flush drops every entry. Useful when a change affects all cached sets
+// (e.g. a role-definition edit affects every holder).
+func (c *Memory) Flush() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.m = map[string]entry{}
+}

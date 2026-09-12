@@ -22,7 +22,11 @@ jobs:
           git diff --exit-code
       - name: no proprietary terminology
         run: |
-          if grep -rniE '\bdeny1\b|deny2' --exclude-dir=.git --exclude-dir=.github .; then
+          # Placeholder denylist (deny1/deny2): substitute the terms to keep out
+          # of the published tree. CI config is excluded so the gate does not
+          # match its own pattern.
+          terms="deny1|deny2"
+          if grep -rniE "($terms)" --exclude-dir=.git --exclude-dir=.github .; then
             echo "::error::proprietary terminology found in the public tree"
             exit 1
           fi

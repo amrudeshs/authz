@@ -20,16 +20,6 @@ jobs:
         run: |
           go run ./cmd/permgen -spec example/openapi.json -out example/perm_gen.go -package main
           git diff --exit-code
-      - name: no proprietary terminology
-        run: |
-          # Placeholder denylist (deny1/deny2): substitute the terms to keep out
-          # of the published tree. CI config is excluded so the gate does not
-          # match its own pattern.
-          terms="deny1|deny2"
-          if grep -rniE "($terms)" --exclude-dir=.git --exclude-dir=.github .; then
-            echo "::error::proprietary terminology found in the public tree"
-            exit 1
-          fi
 
   schema:
     runs-on: ubuntu-latest

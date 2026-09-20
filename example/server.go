@@ -132,7 +132,7 @@ func (s *server) router() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
-	mw := authzchi.Middleware{Resolver: s, Routes: RoutePermissions}
+	mw := authzchi.Middleware{Resolver: s, Routes: RoutePermissions, PublicRoutes: PublicRoutes}
 	r.Group(func(g gochi.Router) {
 		g.Use(mw.Handler)
 		g.Get("/projects", s.listProjects)

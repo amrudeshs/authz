@@ -41,6 +41,7 @@ func TestGenerateArtifacts(t *testing.T) {
 		`"tenant.manage"`,                   // x-permissions capability
 		`"GET /projects": "listProjects"`,   // route map
 		`"POST /projects": "createProject"`, // route map
+		`"GET /health": true`,               // public allowlist
 		`"member"`,                          // role seed
 		`"project.write"`,                   // role seed codename
 	} {
@@ -49,8 +50,9 @@ func TestGenerateArtifacts(t *testing.T) {
 		}
 	}
 
-	// Public operations are absent from the middleware map.
-	if strings.Contains(got, `"GET /health"`) {
+	// Public operations are kept out of the codename map: they appear only in
+	// the explicit PublicRoutes allowlist, never as a gated route.
+	if strings.Contains(got, `"GET /health": "health"`) {
 		t.Fatalf("public route must not appear in RoutePermissions\n%s", got)
 	}
 }

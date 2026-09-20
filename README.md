@@ -49,6 +49,10 @@ Rules the core enforces by construction:
 
 - **Fail closed** — resolver errors propagate; the documented middleware maps
   them to deny, never open.
+- **Unknown routes deny by default** — the middleware gates every matched
+  route from an explicit policy map; public routes come from a separate
+  explicit allowlist. A route missing from both is a misconfiguration, so it
+  is refused rather than passed through.
 - **Empty role slugs mean "no active membership"** — hosts distinguish "member
   with no roles" (403 on gated routes) from "no membership" (404, existence
   hiding). Both resolve to a deny; the host chooses the status code.
@@ -90,10 +94,12 @@ with an empty array so its row exists for membership binding.
 If the host is OpenAPI-first, generate the vocabulary from the spec in the
 same pipeline as the server codegen — one codename per `operationId`, plus
 non-endpoint capabilities declared as `x-permissions` on the root document,
-plus a `METHOD /path` → codename map for middleware enforcement. Mark public
-operations `x-public: true` (they stay in the vocabulary but are absent from
-the middleware map). The optional root `x-role-seed` declares the default
-role matrix.
+plus a `METHOD /path` → codename map for middleware enforcement and an
+explicit `PublicRoutes` allowlist. Mark public operations `x-public: true`:
+they stay in the vocabulary and land in `PublicRoutes`, not in the codename
+map — so the middleware can distinguish a declared public route from an
+unmapped (misconfigured) one. The optional root `x-role-seed` declares the
+default role matrix.
 
 ```sh
 go run ./cmd/permgen -spec example/openapi.json -out example/perm_gen.go -package main
@@ -111,6 +117,7 @@ workspace scoping). Recommended denial semantics:
 | No active membership on the tenant | 404 (existence hiding) |
 | Membership without the codename | 403 |
 | Resolution failure | 500 — fail closed |
+| Matched route absent from both the codename map and `PublicRoutes` | 500 — misconfiguration, fail closed |
 
 Cache invalidation is part of the contract: role-definition changes flush all
 cached sets (they affect every holder); membership changes flush that

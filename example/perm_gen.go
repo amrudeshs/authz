@@ -19,7 +19,8 @@ var Vocabulary = []string{
 }
 
 // RoutePermissions maps "METHOD /path" to its governing codename.
-// Public operations are absent.
+// Every non-public operation appears here; the middleware denies a
+// matched route that is in neither this map nor PublicRoutes.
 var RoutePermissions = map[string]string{
 	"DELETE /projects/{id}":               "deleteProject",
 	"GET /projects":                       "listProjects",
@@ -32,6 +33,12 @@ var RoutePermissions = map[string]string{
 	"POST /roles":                         "createRole",
 	"POST /roles/{slug}/permissions":      "setRolePermission",
 	"POST /tasks/{id}/complete":           "completeTask",
+}
+
+// PublicRoutes is the explicit no-auth allowlist: every operation marked
+// x-public. Absence from RoutePermissions is not enough to be public.
+var PublicRoutes = map[string]bool{
+	"GET /health": true,
 }
 
 // RoleSeed is the slug -> codenames matrix from x-role-seed.

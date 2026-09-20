@@ -9,8 +9,12 @@
 //     non-endpoint capability listed under the root
 //     extension `x-permissions`.
 //   - RoutePermissions — "METHOD /path" → codename, for middleware
-//     enforcement. Operations marked `x-public: true`
-//     are absent.
+//     enforcement.
+//   - PublicRoutes     — the explicit no-auth allowlist: "METHOD /path"
+//     for every operation marked `x-public: true`. The
+//     middleware denies any matched route absent from
+//     both maps, so public access is declared, never
+//     inferred from a missing policy.
 //   - RoleSeed         — role slug → codenames, from the optional root
 //     extension `x-role-seed` (host-defined matrix).
 //
@@ -54,6 +58,7 @@ func generate(specJSON []byte, pkg string) ([]byte, error) {
 	}
 
 	vocab := map[string]bool{}
+	public := map[string]bool{}
 	var ops []operation
 	for path, methods := range s.Paths {
 		for method, o := range methods {
@@ -67,7 +72,11 @@ func generate(specJSON []byte, pkg string) ([]byte, error) {
 			}
 			vocab[o.OperationID] = true
 			if o.XPublic {
-				continue // public: no middleware codename
+				// Public: no middleware codename, but recorded explicitly so
+				// the middleware can tell a declared public route apart from
+				// an unlisted (misconfigured) one.
+				public[strings.ToUpper(method)+" "+path] = true
+				continue
 			}
 			ops = append(ops, operation{method, path, o.OperationID, o.XPublic})
 		}
@@ -101,10 +110,19 @@ func generate(specJSON []byte, pkg string) ([]byte, error) {
 	fmt.Fprintln(&b, "}")
 
 	fmt.Fprintln(&b, "\n// RoutePermissions maps \"METHOD /path\" to its governing codename.")
-	fmt.Fprintln(&b, "// Public operations are absent.")
+	fmt.Fprintln(&b, "// Every non-public operation appears here; the middleware denies a")
+	fmt.Fprintln(&b, "// matched route that is in neither this map nor PublicRoutes.")
 	fmt.Fprintln(&b, "var RoutePermissions = map[string]string{")
 	for _, k := range sortedKeys(routes) {
 		fmt.Fprintf(&b, "\t%q: %q,\n", k, routes[k])
+	}
+	fmt.Fprintln(&b, "}")
+
+	fmt.Fprintln(&b, "\n// PublicRoutes is the explicit no-auth allowlist: every operation marked")
+	fmt.Fprintln(&b, "// x-public. Absence from RoutePermissions is not enough to be public.")
+	fmt.Fprintln(&b, "var PublicRoutes = map[string]bool{")
+	for _, k := range sortedKeys(public) {
+		fmt.Fprintf(&b, "\t%q: true,\n", k)
 	}
 	fmt.Fprintln(&b, "}")
 

@@ -25,9 +25,14 @@ type Resolver interface {
 
 // Middleware gates requests by codename using the route pattern chi matched.
 //
-//	Routes maps "METHOD /path" to its codename. Patterns absent from Routes
-//	are treated as public and pass through (the generated map already omits
-//	x-public operations).
+//	Routes maps "METHOD /path" to its codename. PublicRoutes is the explicit
+//	allowlist of "METHOD /path" patterns that bypass the gate; the generated
+//	PublicRoutes var holds every x-public operation.
+//
+// The default is DENY. A route chi matched inside the gated group but present
+// in neither map is a misconfiguration — the router and the policy map have
+// drifted apart — so it is refused rather than let through. Public access
+// must be declared, never inferred from an absent policy.
 //
 // Apply it to a route group (or via With) so chi has already matched the
 // route when the middleware runs:
@@ -37,9 +42,10 @@ type Resolver interface {
 //	    g.Get("/projects", listProjects)
 //	})
 type Middleware struct {
-	Resolver    Resolver
-	Routes      map[string]string
-	StripPrefix string // optional mount prefix stripped from the route pattern
+	Resolver     Resolver
+	Routes       map[string]string
+	PublicRoutes map[string]bool
+	StripPrefix  string // optional mount prefix stripped from the route pattern
 }
 
 // Handler is a chi middleware: http.Handler -> http.Handler.
@@ -49,9 +55,17 @@ func (m Middleware) Handler(next http.Handler) http.Handler {
 		if m.StripPrefix != "" {
 			pattern = strings.TrimPrefix(pattern, m.StripPrefix)
 		}
-		codename, gated := m.Routes[strings.ToUpper(r.Method)+" "+pattern]
+		key := strings.ToUpper(r.Method) + " " + pattern
+		codename, gated := m.Routes[key]
 		if !gated {
-			next.ServeHTTP(w, r)
+			if m.PublicRoutes[key] {
+				next.ServeHTTP(w, r)
+				return
+			}
+			// Fail closed: chi matched a route with no policy. Denying here is
+			// what stops a route added without regenerating RoutePermissions
+			// from silently becoming public.
+			deny(w, http.StatusInternalServerError, "server misconfigured")
 			return
 		}
 		if m.Resolver == nil {

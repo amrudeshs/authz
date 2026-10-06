@@ -5,6 +5,7 @@ package chi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,15 +16,28 @@ import (
 )
 
 type stubResolver struct {
-	authed bool
-	member bool
-	perms  []string
+	authed     bool
+	member     bool
+	perms      []string
+	resolveErr error
+	memberErr  error
 }
 
-func (s stubResolver) Resolve(*http.Request) (authz.PermissionSet, bool) {
-	return authz.PermissionSet{Permissions: s.perms}, s.authed
+func (s stubResolver) Resolve(*http.Request) (authz.PermissionSet, error) {
+	if s.resolveErr != nil {
+		return authz.PermissionSet{}, s.resolveErr
+	}
+	if !s.authed {
+		return authz.PermissionSet{}, ErrUnauthenticated
+	}
+	return authz.PermissionSet{Permissions: s.perms}, nil
 }
-func (s stubResolver) HasMembership(*http.Request) bool { return s.member }
+func (s stubResolver) HasMembership(*http.Request) (bool, error) {
+	if s.memberErr != nil {
+		return false, s.memberErr
+	}
+	return s.member, nil
+}
 
 // slugResolver is a minimal authz.Resolver used to build a real wildcard set.
 type slugResolver struct{ slug string }
@@ -38,10 +52,12 @@ func (s slugResolver) PermissionCodenames(_ context.Context, _ int64, _ []string
 // wildcardResolver produces a genuine wildcard permission set via authz.Resolve.
 type wildcardResolver struct{ stubResolver }
 
-func (w wildcardResolver) Resolve(r *http.Request) (authz.PermissionSet, bool) {
-	ps, _ := authz.Resolve(r.Context(), slugResolver{"owner"}, 1, 1, nil,
+func (w wildcardResolver) Resolve(r *http.Request) (authz.PermissionSet, error) {
+	if !w.authed {
+		return authz.PermissionSet{}, ErrUnauthenticated
+	}
+	return authz.Resolve(r.Context(), slugResolver{"owner"}, 1, 1, nil,
 		authz.Options{WildcardRoleSlug: "owner"})
-	return ps, w.authed
 }
 
 func router(res Resolver) http.Handler {
@@ -87,6 +103,8 @@ func TestMiddlewareSemantics(t *testing.T) {
 		{"missing codename -> 403", stubResolver{authed: true, member: true, perms: []string{"other"}}, "/projects", http.StatusForbidden},
 		{"granted -> 200", stubResolver{authed: true, member: true, perms: []string{"project.read"}}, "/projects", http.StatusOK},
 		{"unmapped route -> 500 (fail closed)", stubResolver{authed: true, member: true, perms: []string{"project.read"}}, "/unmapped", http.StatusInternalServerError},
+		{"resolution failure -> 500", stubResolver{authed: true, member: true, resolveErr: errors.New("db down")}, "/projects", http.StatusInternalServerError},
+		{"membership lookup failure -> 500", stubResolver{authed: true, member: true, memberErr: errors.New("db down"), perms: []string{"project.read"}}, "/projects", http.StatusInternalServerError},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

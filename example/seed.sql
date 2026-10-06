@@ -61,8 +61,8 @@ SELECT seed_role_permissions('{
 }');
 
 -- Bind memberships to roles.
-INSERT INTO membership_roles (membership_id, role_id)
-SELECT m.id, r.id
+INSERT INTO membership_roles (membership_id, role_id, tenant_id)
+SELECT m.id, r.id, t.id
 FROM (VALUES
     ('acme',   'owner@acme.test',   'owner'),
     ('acme',   'editor@acme.test',  'editor'),
@@ -72,7 +72,7 @@ FROM (VALUES
 JOIN tenants t ON t.slug = b.workspace
 JOIN users u ON u.email = b.email
 JOIN memberships m ON m.tenant_id = t.id AND m.user_id = u.id
-JOIN roles r ON r.tenant_id = t.id AND r.slug = b.role_slug;
+JOIN roles r ON r.tenant_id = t.id AND r.slug = b.role_slug AND r.deleted_at IS NULL;
 
 -- Demo resources.
 INSERT INTO example_projects (tenant_id, owner_id, name)

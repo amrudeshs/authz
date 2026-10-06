@@ -64,10 +64,18 @@ func generate(specJSON []byte, pkg string) ([]byte, error) {
 		for method, o := range methods {
 			switch method {
 			case "get", "post", "put", "patch", "delete":
+				if o.OperationID == "" {
+					return nil, fmt.Errorf("%s %s: operationId is required", strings.ToUpper(method), path)
+				}
+			case "head", "options", "trace":
+				return nil, fmt.Errorf("%s %s: method is not part of the vocabulary; remove it or use get/post/put/patch/delete", strings.ToUpper(method), path)
 			default:
-				continue
-			}
-			if o.OperationID == "" {
+				// Path-item fields (parameters, summary, servers, $ref) and
+				// an uppercase method key. An uppercase method would be
+				// silently skipped, so refuse it.
+				if looksLikeMethod(method) {
+					return nil, fmt.Errorf("%s %s: method must be lowercase get, post, put, patch, or delete", method, path)
+				}
 				continue
 			}
 			vocab[o.OperationID] = true
@@ -184,6 +192,15 @@ func main() {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "permgen: wrote %s\n", *outPath)
+}
+
+func looksLikeMethod(method string) bool {
+	switch strings.ToLower(method) {
+	case "get", "post", "put", "patch", "delete", "head", "options", "trace":
+		return method != strings.ToLower(method)
+	default:
+		return false
+	}
 }
 
 func sortedKeys[V any](m map[string]V) []string {

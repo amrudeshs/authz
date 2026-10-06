@@ -5,7 +5,9 @@ package authz
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 )
@@ -34,17 +36,25 @@ func (s *stubResolver) PermissionCodenames(_ context.Context, _ int64, slugs []s
 
 type mapCache struct{ m map[string][]byte }
 
-func (c *mapCache) Get(_ context.Context, k string) ([]byte, bool) {
+func (c *mapCache) Get(_ context.Context, k string) ([]byte, bool, error) {
 	v, ok := c.m[k]
-	return v, ok
+	return v, ok, nil
 }
-func (c *mapCache) Set(_ context.Context, k string, v []byte, _ time.Duration) {
+func (c *mapCache) Set(_ context.Context, k string, v []byte, _ time.Duration) error {
 	if c.m == nil {
 		c.m = map[string][]byte{}
 	}
-	c.m[k] = v
+	c.m[k] = append([]byte(nil), v...)
+	return nil
 }
-func (c *mapCache) Del(_ context.Context, k string) { delete(c.m, k) }
+func (c *mapCache) Del(_ context.Context, k string) error {
+	delete(c.m, k)
+	return nil
+}
+func (c *mapCache) Flush(_ context.Context) error {
+	c.m = map[string][]byte{}
+	return nil
+}
 
 var vocab = []string{"a.create", "b.read", "c.grade"}
 
@@ -122,7 +132,9 @@ func TestCachedResolverCachesAndInvalidates(t *testing.T) {
 		t.Fatalf("second resolve must hit the cache: %d → %d inner calls",
 			callsAfterFirst, inner.calls)
 	}
-	cr.Invalidate(ctx, "k")
+	if err := cr.Invalidate(ctx, "k"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := cr.ResolveFor(ctx, "k", 7, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -291,12 +303,157 @@ func TestResolveUsesDefaultKey(t *testing.T) {
 	if _, err := cr.Resolve(ctx, 7, 2); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cache.Get(ctx, "perms:7:2"); !ok {
+	if _, ok, err := cache.Get(ctx, "perms:7:2"); err != nil || !ok {
 		t.Fatal("default key must land the entry under the host's discipline")
 	}
 	// Invalidate under the same discipline finds it
-	cr.Invalidate(ctx, "perms:7:2")
-	if _, ok := cache.Get(ctx, "perms:7:2"); ok {
+	if err := cr.Invalidate(ctx, "perms:7:2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := cache.Get(ctx, "perms:7:2"); err != nil || ok {
 		t.Fatal("invalidate must drop the default-key entry")
+	}
+}
+
+// A cache hit must still be a wildcard set, including codenames that were
+// not in the vocabulary when the entry was written. That is the property
+// the wildcard exists for.
+func TestWildcardSurvivesCacheAndVocabularyGrowth(t *testing.T) {
+	cache := &mapCache{}
+	current := append([]string(nil), vocab...)
+	cr := &CachedResolver{
+		Inner: newStub(), Cache: cache, TTL: time.Minute,
+		Options: Options{WildcardRoleSlug: "admin"},
+		VocabFn: func() []string { return current },
+	}
+	ctx := context.Background()
+	first, err := cr.ResolveFor(ctx, "admin", 7, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.All() || !first.Has("not-in-the-vocabulary") {
+		t.Fatal("fresh wildcard resolve must grant unknown codenames")
+	}
+	calls := 0
+	cr.Inner = callCountingResolver{inner: newStub(), n: &calls}
+	second, err := cr.ResolveFor(ctx, "admin", 7, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 0 {
+		t.Fatalf("second resolve must be a cache hit, inner calls = %d", calls)
+	}
+	if !second.All() || !second.Has("invented-after-fill") {
+		t.Fatal("cached wildcard must still grant codenames absent from the snapshot")
+	}
+	current = append(current, "brand.new")
+	third, err := cr.ResolveFor(ctx, "admin", 7, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !third.All() || !third.Has("brand.new") {
+		t.Fatal("cache hit must refresh the wildcard vocabulary from VocabFn")
+	}
+}
+
+type callCountingResolver struct {
+	inner Resolver
+	n     *int
+}
+
+func (c callCountingResolver) RoleSlugs(ctx context.Context, tenantID, userID int64) ([]string, error) {
+	*c.n++
+	return c.inner.RoleSlugs(ctx, tenantID, userID)
+}
+
+func (c callCountingResolver) PermissionCodenames(ctx context.Context, tenantID int64, slugs []string) ([]string, error) {
+	*c.n++
+	return c.inner.PermissionCodenames(ctx, tenantID, slugs)
+}
+
+func TestResolveCopiesVocabulary(t *testing.T) {
+	original := []string{"a.create"}
+	ps, err := Resolve(context.Background(), newStub(), 7, 1, original, Options{WildcardRoleSlug: "admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ps.Permissions[0] = "mutated"
+	if original[0] != "a.create" {
+		t.Fatal("Resolve must copy the vocabulary slice")
+	}
+}
+
+func TestResolveForDoesNotRestoreInvalidatedKey(t *testing.T) {
+	cache := &mapCache{}
+	inner := &blockingResolver{
+		stub:    newStub(),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	cr := &CachedResolver{
+		Inner: inner, Cache: cache, TTL: time.Minute,
+		VocabFn: func() []string { return vocab },
+	}
+	ctx := context.Background()
+	done := make(chan error, 1)
+	go func() {
+		_, err := cr.ResolveFor(ctx, "k", 7, 2)
+		done <- err
+	}()
+	<-inner.started
+	if err := cr.Invalidate(ctx, "k"); err != nil {
+		t.Fatal(err)
+	}
+	close(inner.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := cache.Get(ctx, "k"); err != nil || ok {
+		t.Fatal("in-flight resolve must not restore a key invalidated during resolution")
+	}
+}
+
+type blockingResolver struct {
+	stub    *stubResolver
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (b *blockingResolver) RoleSlugs(ctx context.Context, tenantID, userID int64) ([]string, error) {
+	b.once.Do(func() {
+		close(b.started)
+		<-b.release
+	})
+	return b.stub.RoleSlugs(ctx, tenantID, userID)
+}
+
+func (b *blockingResolver) PermissionCodenames(ctx context.Context, tenantID int64, slugs []string) ([]string, error) {
+	return b.stub.PermissionCodenames(ctx, tenantID, slugs)
+}
+
+type errCache struct {
+	mapCache
+	setErr error
+}
+
+func (c *errCache) Set(ctx context.Context, k string, v []byte, ttl time.Duration) error {
+	if c.setErr != nil {
+		return c.setErr
+	}
+	return c.mapCache.Set(ctx, k, v, ttl)
+}
+
+func TestResolveForPropagatesCacheSetError(t *testing.T) {
+	boom := errors.New("redis down")
+	cr := &CachedResolver{
+		Inner:   newStub(),
+		Cache:   &errCache{setErr: boom},
+		TTL:     time.Minute,
+		VocabFn: func() []string { return vocab },
+	}
+	_, err := cr.ResolveFor(context.Background(), "k", 7, 2)
+	if !errors.Is(err, boom) {
+		t.Fatalf("err = %v, want cache set failure", err)
 	}
 }

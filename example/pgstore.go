@@ -51,8 +51,10 @@ func (s *pgStore) RoleSlugs(ctx context.Context, workspaceID, userID int64) ([]s
 		SELECT r.slug
 		FROM memberships m
 		JOIN membership_roles mr ON mr.membership_id = m.id
-		JOIN roles r ON r.id = mr.role_id
-		WHERE m.tenant_id = $1 AND m.user_id = $2 AND r.deleted_at IS NULL
+		JOIN roles r ON r.id = mr.role_id AND r.tenant_id = mr.tenant_id
+		WHERE m.tenant_id = $1 AND m.user_id = $2
+		  AND mr.tenant_id = m.tenant_id
+		  AND r.deleted_at IS NULL
 		ORDER BY r.slug`, workspaceID, userID)
 	if err != nil {
 		return nil, err
@@ -221,14 +223,52 @@ func (s *pgStore) SetRolePermission(ctx context.Context, workspaceID int64, slug
 		return false, errSystemRole
 	}
 	if allow {
-		_, err = s.pool.Exec(ctx,
-			`INSERT INTO role_permissions (role_id, permission_codename) VALUES ($1, $2)
-			 ON CONFLICT DO NOTHING`, roleID, codename)
-	} else {
-		_, err = s.pool.Exec(ctx,
-			`DELETE FROM role_permissions WHERE role_id = $1 AND permission_codename = $2`, roleID, codename)
+		tag, execErr := s.pool.Exec(ctx, `
+			INSERT INTO role_permissions (role_id, permission_codename)
+			SELECT r.id, $2 FROM roles r
+			WHERE r.id = $1 AND r.tenant_id = $3 AND r.is_system = false AND r.deleted_at IS NULL
+			ON CONFLICT DO NOTHING`, roleID, codename, workspaceID)
+		if execErr != nil {
+			return false, execErr
+		}
+		if tag.RowsAffected() == 0 {
+			// The row already existed, or the role became a system role
+			// between the read and the write. Re-read so a system role is
+			// not reported as a successful no-op.
+			var system bool
+			err = s.pool.QueryRow(ctx,
+				`SELECT is_system FROM roles WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+				roleID, workspaceID).Scan(&system)
+			if err != nil {
+				return false, err
+			}
+			if system {
+				return false, errSystemRole
+			}
+		}
+		return true, nil
 	}
-	return err == nil, err
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM role_permissions rp
+		USING roles r
+		WHERE rp.role_id = r.id AND r.id = $1 AND r.tenant_id = $3
+		  AND r.is_system = false AND rp.permission_codename = $2`, roleID, codename, workspaceID)
+	if err != nil {
+		return false, err
+	}
+	if tag.RowsAffected() == 0 {
+		var system bool
+		err = s.pool.QueryRow(ctx,
+			`SELECT is_system FROM roles WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+			roleID, workspaceID).Scan(&system)
+		if err != nil {
+			return false, err
+		}
+		if system {
+			return false, errSystemRole
+		}
+	}
+	return true, nil
 }
 
 func (s *pgStore) AssignRole(ctx context.Context, workspaceID, userID int64, slug string) (bool, error) {
@@ -250,9 +290,26 @@ func (s *pgStore) AssignRole(ctx context.Context, workspaceID, userID int64, slu
 		return false, err
 	}
 	_, err = s.pool.Exec(ctx,
-		`INSERT INTO membership_roles (membership_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
-		membershipID, roleID)
+		`INSERT INTO membership_roles (membership_id, role_id, tenant_id) VALUES ($1, $2, $3)
+		 ON CONFLICT DO NOTHING`,
+		membershipID, roleID, workspaceID)
 	return err == nil, err
+}
+
+func (s *pgStore) UnassignRole(ctx context.Context, workspaceID, userID int64, slug string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `
+		DELETE FROM membership_roles mr
+		USING memberships m, roles r
+		WHERE mr.membership_id = m.id
+		  AND mr.role_id = r.id
+		  AND mr.tenant_id = m.tenant_id
+		  AND r.tenant_id = m.tenant_id
+		  AND m.tenant_id = $1 AND m.user_id = $2
+		  AND r.slug = $3 AND r.deleted_at IS NULL`, workspaceID, userID, slug)
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
 }
 
 func collectStrings(rows pgx.Rows) ([]string, error) {

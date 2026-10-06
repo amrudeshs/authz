@@ -6,6 +6,7 @@
     "description": "A minimal multi-tenant API (workspaces, projects, tasks, roles) demonstrating function-level authorization with the authz module."
   },
   "x-role-seed": {
+    "owner": [],
     "editor": [
       "listProjects", "createProject", "getProject",
       "listTasks", "createTask", "completeTask",
@@ -42,7 +43,8 @@
       "post": { "operationId": "setRolePermission" }
     },
     "/members/{userId}/roles/{slug}": {
-      "post": { "operationId": "assignRole" }
+      "post": { "operationId": "assignRole" },
+      "delete": { "operationId": "unassignRole" }
     }
   }
 }

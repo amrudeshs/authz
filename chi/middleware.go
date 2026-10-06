@@ -7,6 +7,7 @@ package chi
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -15,12 +16,25 @@ import (
 	"github.com/amrudeshs/authz"
 )
 
-// Resolver is the host hook the middleware needs. Resolve returns the
-// caller's permission set (ok=false → 401). HasMembership reports whether the
-// caller belongs to the routed tenant (false → 404 existence hiding).
+// ErrUnauthenticated is returned by Resolver.Resolve when the request has no
+// authenticated caller. The middleware maps it to 401. Any other error from
+// Resolve or HasMembership is a storage failure and maps to 500 — never to a
+// client deny. Collapsing a storage error into an empty set makes an outage
+// look like a missing permission.
+var ErrUnauthenticated = errors.New("unauthenticated")
+
+// Resolver is the host hook the middleware needs.
+//
+// Resolve returns the caller's permission set. ErrUnauthenticated means 401.
+// Any other error means 500. A nil error means the caller is authenticated;
+// membership is a separate check so the host can hide a missing tenant (404)
+// from a missing permission (403).
+//
+// HasMembership reports whether the caller belongs to the routed tenant.
+// false, nil → 404. A non-nil error → 500.
 type Resolver interface {
-	Resolve(r *http.Request) (set authz.PermissionSet, ok bool)
-	HasMembership(r *http.Request) bool
+	Resolve(r *http.Request) (set authz.PermissionSet, err error)
+	HasMembership(r *http.Request) (bool, error)
 }
 
 // Middleware gates requests by codename using the route pattern chi matched.
@@ -32,7 +46,9 @@ type Resolver interface {
 // The default is DENY. A route chi matched inside the gated group but present
 // in neither map is a misconfiguration — the router and the policy map have
 // drifted apart — so it is refused rather than let through. Public access
-// must be declared, never inferred from an absent policy.
+// must be declared, never inferred from an absent policy. The gate only sees
+// routes registered inside the group (or With) it is installed on. A route
+// mounted outside that group never reaches it; unmatched paths are chi's 404.
 //
 // Apply it to a route group (or via With) so chi has already matched the
 // route when the middleware runs:
@@ -72,12 +88,21 @@ func (m Middleware) Handler(next http.Handler) http.Handler {
 			deny(w, http.StatusInternalServerError, "server misconfigured")
 			return
 		}
-		set, ok := m.Resolver.Resolve(r)
-		if !ok {
-			deny(w, http.StatusUnauthorized, "unauthorized")
+		set, err := m.Resolver.Resolve(r)
+		if err != nil {
+			if errors.Is(err, ErrUnauthenticated) {
+				deny(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			deny(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		if !m.Resolver.HasMembership(r) {
+		member, err := m.Resolver.HasMembership(r)
+		if err != nil {
+			deny(w, http.StatusInternalServerError, "internal error")
+			return
+		}
+		if !member {
 			deny(w, http.StatusNotFound, "not found")
 			return
 		}

@@ -5,8 +5,15 @@ package main
 
 import "context"
 
-// errSystemRole is returned when a write targets an immutable system role.
+// errSystemRole is returned when a write targets a system role. The handler
+// must refuse it; the reference schema also rejects the permission write
+// unless seed_role_permissions is running. Do not treat a 0-row update as
+// success.
 var errSystemRole = errorString("system roles are immutable")
+
+// errReservedSlug is returned when a custom role reuses the wildcard slug.
+// That slug is a process-wide admin grant, not a free name.
+var errReservedSlug = errorString("role slug is reserved")
 
 type errorString string
 
@@ -67,4 +74,5 @@ type Store interface {
 	CreateRole(ctx context.Context, workspaceID int64, slug, name string) error
 	SetRolePermission(ctx context.Context, workspaceID int64, slug, codename string, allow bool) (bool, error)
 	AssignRole(ctx context.Context, workspaceID, userID int64, slug string) (bool, error)
+	UnassignRole(ctx context.Context, workspaceID, userID int64, slug string) (bool, error)
 }

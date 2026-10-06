@@ -57,6 +57,28 @@ func TestGenerateArtifacts(t *testing.T) {
 	}
 }
 
+func TestGenerateRejectsMissingOperationID(t *testing.T) {
+	spec := `{
+	  "paths": {
+	    "/projects": {"get": {}}
+	  }
+	}`
+	if _, err := generate([]byte(spec), "main"); err == nil {
+		t.Fatal("missing operationId must fail the build")
+	}
+}
+
+func TestGenerateRejectsUppercaseMethod(t *testing.T) {
+	spec := `{
+	  "paths": {
+	    "/projects": {"GET": {"operationId": "listProjects"}}
+	  }
+	}`
+	if _, err := generate([]byte(spec), "main"); err == nil {
+		t.Fatal("uppercase method must fail the build, not be skipped")
+	}
+}
+
 func TestGenerateDeterministic(t *testing.T) {
 	a, err := generate([]byte(fixture), "main")
 	if err != nil {

@@ -16,23 +16,25 @@ var Vocabulary = []string{
 	"listRoles",
 	"listTasks",
 	"setRolePermission",
+	"unassignRole",
 }
 
 // RoutePermissions maps "METHOD /path" to its governing codename.
 // Every non-public operation appears here; the middleware denies a
 // matched route that is in neither this map nor PublicRoutes.
 var RoutePermissions = map[string]string{
-	"DELETE /projects/{id}":               "deleteProject",
-	"GET /projects":                       "listProjects",
-	"GET /projects/{id}":                  "getProject",
-	"GET /projects/{id}/tasks":            "listTasks",
-	"GET /roles":                          "listRoles",
-	"POST /members/{userId}/roles/{slug}": "assignRole",
-	"POST /projects":                      "createProject",
-	"POST /projects/{id}/tasks":           "createTask",
-	"POST /roles":                         "createRole",
-	"POST /roles/{slug}/permissions":      "setRolePermission",
-	"POST /tasks/{id}/complete":           "completeTask",
+	"DELETE /members/{userId}/roles/{slug}": "unassignRole",
+	"DELETE /projects/{id}":                 "deleteProject",
+	"GET /projects":                         "listProjects",
+	"GET /projects/{id}":                    "getProject",
+	"GET /projects/{id}/tasks":              "listTasks",
+	"GET /roles":                            "listRoles",
+	"POST /members/{userId}/roles/{slug}":   "assignRole",
+	"POST /projects":                        "createProject",
+	"POST /projects/{id}/tasks":             "createTask",
+	"POST /roles":                           "createRole",
+	"POST /roles/{slug}/permissions":        "setRolePermission",
+	"POST /tasks/{id}/complete":             "completeTask",
 }
 
 // PublicRoutes is the explicit no-auth allowlist: every operation marked
@@ -58,4 +60,5 @@ var RoleSeed = map[string][]string{
 		"listRoles",
 		"listTasks",
 	},
+	"owner": {},
 }

@@ -15,15 +15,19 @@ func TestMemoryGetSetTTLDel(t *testing.T) {
 	ctx := context.Background()
 	c := NewMemory()
 
-	if _, ok := c.Get(ctx, "missing"); ok {
+	if _, ok, err := c.Get(ctx, "missing"); err != nil || ok {
 		t.Fatal("missing key must miss")
 	}
-	c.Set(ctx, "k", []byte("v"), time.Minute)
-	if v, ok := c.Get(ctx, "k"); !ok || string(v) != "v" {
-		t.Fatalf("got %q, %v", v, ok)
+	if err := c.Set(ctx, "k", []byte("v"), time.Minute); err != nil {
+		t.Fatal(err)
 	}
-	c.Del(ctx, "k")
-	if _, ok := c.Get(ctx, "k"); ok {
+	if v, ok, err := c.Get(ctx, "k"); err != nil || !ok || string(v) != "v" {
+		t.Fatalf("got %q, %v, %v", v, ok, err)
+	}
+	if err := c.Del(ctx, "k"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := c.Get(ctx, "k"); err != nil || ok {
 		t.Fatal("deleted key must miss")
 	}
 }
@@ -31,9 +35,11 @@ func TestMemoryGetSetTTLDel(t *testing.T) {
 func TestMemoryTTLExpiry(t *testing.T) {
 	ctx := context.Background()
 	c := NewMemory()
-	c.Set(ctx, "t", []byte("v"), time.Millisecond)
+	if err := c.Set(ctx, "t", []byte("v"), time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(5 * time.Millisecond)
-	if _, ok := c.Get(ctx, "t"); ok {
+	if _, ok, err := c.Get(ctx, "t"); err != nil || ok {
 		t.Fatal("expired entry must miss")
 	}
 }
@@ -41,10 +47,32 @@ func TestMemoryTTLExpiry(t *testing.T) {
 func TestMemoryNoTTLNeverExpires(t *testing.T) {
 	ctx := context.Background()
 	c := NewMemory()
-	c.Set(ctx, "forever", []byte("v"), 0)
+	if err := c.Set(ctx, "forever", []byte("v"), 0); err != nil {
+		t.Fatal(err)
+	}
 	time.Sleep(2 * time.Millisecond)
-	if _, ok := c.Get(ctx, "forever"); !ok {
+	if _, ok, err := c.Get(ctx, "forever"); err != nil || !ok {
 		t.Fatal("ttl<=0 must not expire")
+	}
+}
+
+func TestMemoryFlush(t *testing.T) {
+	ctx := context.Background()
+	c := NewMemory()
+	if err := c.Set(ctx, "a", []byte("1"), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Set(ctx, "b", []byte("2"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, err := c.Get(ctx, "a"); err != nil || ok {
+		t.Fatal("flush must drop every entry")
+	}
+	if _, ok, err := c.Get(ctx, "b"); err != nil || ok {
+		t.Fatal("flush must drop non-expiring entries too")
 	}
 }
 

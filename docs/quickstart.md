@@ -82,6 +82,15 @@ curl -s -X POST -H 'X-Workspace: acme' -H 'Authorization: Bearer owner-acme' \
 curl -si -X POST -H 'Content-Type: application/json' \
   -H 'X-Workspace: acme' -H 'Authorization: Bearer member-acme' \
   -d '{"name":"After grant"}' $B/projects | head -1
+
+# 200 — revoke the binding; the member's cache entry is dropped
+curl -si -X DELETE -H 'X-Workspace: acme' -H 'Authorization: Bearer owner-acme' \
+  $B/members/3/roles/manager | head -1
+
+# 403 — the capability is gone on the next request
+curl -si -X POST -H 'Content-Type: application/json' \
+  -H 'X-Workspace: acme' -H 'Authorization: Bearer member-acme' \
+  -d '{"name":"After revoke"}' $B/projects | head -1
 ```
 
 A grant to a **system** role is refused (403):
@@ -108,4 +117,5 @@ go run ./example
 ```
 
 With `DATABASE_URL` unset it serves the same demo dataset from memory, which
-is how the unit tests run.
+is how the unit tests run. The Postgres integration tests use the same
+variable and are described in the README.

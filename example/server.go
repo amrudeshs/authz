@@ -68,7 +68,15 @@ func (s *server) identity(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		if token != "" {
-			if u, ok, err := s.store.UserByToken(r.Context(), token); err == nil && ok {
+			u, ok, err := s.store.UserByToken(r.Context(), token)
+			if err != nil {
+				// A presented credential that cannot be checked is not an
+				// anonymous request. Mapping it to "no user" becomes a 401
+				// and hides the outage.
+				writeErr(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			if ok {
 				r = r.WithContext(context.WithValue(r.Context(), userCtx, u))
 			}
 		}
@@ -79,7 +87,12 @@ func (s *server) identity(next http.Handler) http.Handler {
 func (s *server) workspace(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if slug := r.Header.Get("X-Workspace"); slug != "" {
-			if ws, ok, err := s.store.WorkspaceBySlug(r.Context(), slug); err == nil && ok {
+			ws, ok, err := s.store.WorkspaceBySlug(r.Context(), slug)
+			if err != nil {
+				writeErr(w, http.StatusInternalServerError, "internal error")
+				return
+			}
+			if ok {
 				r = r.WithContext(context.WithValue(r.Context(), workspaceCtx, ws))
 			}
 		}
@@ -89,36 +102,26 @@ func (s *server) workspace(next http.Handler) http.Handler {
 
 // ---- the chi.Resolver the adapter calls ----
 
-func (s *server) Resolve(r *http.Request) (authz.PermissionSet, bool) {
+func (s *server) Resolve(r *http.Request) (authz.PermissionSet, error) {
 	u, ok := userFrom(r.Context())
 	if !ok {
-		return authz.PermissionSet{}, false // 401
+		return authz.PermissionSet{}, authzchi.ErrUnauthenticated
 	}
 	ws, ok := workspaceFrom(r.Context())
 	if !ok {
-		return authz.PermissionSet{}, true // authenticated, no workspace → 404 via HasMembership
+		// Authenticated, no workspace. HasMembership returns false → 404.
+		return authz.PermissionSet{}, nil
 	}
-	ps, err := s.authz.ResolveFor(r.Context(), s.authz.Key(ws.ID, u.ID), ws.ID, u.ID)
-	if err != nil {
-		return authz.PermissionSet{}, true // fail closed: empty set
-	}
-	return ps, true
+	return s.authz.ResolveFor(r.Context(), s.authz.Key(ws.ID, u.ID), ws.ID, u.ID)
 }
 
-func (s *server) HasMembership(r *http.Request) bool {
+func (s *server) HasMembership(r *http.Request) (bool, error) {
 	u, uok := userFrom(r.Context())
 	ws, wok := workspaceFrom(r.Context())
 	if !uok || !wok {
-		return false
+		return false, nil
 	}
-	member, err := s.store.IsMember(r.Context(), ws.ID, u.ID)
-	return err == nil && member
-}
-
-func (s *server) flushAll() {
-	if f, ok := s.authz.Cache.(interface{ Flush() }); ok {
-		f.Flush()
-	}
+	return s.store.IsMember(r.Context(), ws.ID, u.ID)
 }
 
 // ---- router ----
@@ -146,6 +149,7 @@ func (s *server) router() http.Handler {
 		g.Post("/roles", s.createRole)
 		g.Post("/roles/{slug}/permissions", s.setRolePermission)
 		g.Post("/members/{userId}/roles/{slug}", s.assignRole)
+		g.Delete("/members/{userId}/roles/{slug}", s.unassignRole)
 	})
 	return r
 }
@@ -278,6 +282,10 @@ func (s *server) createRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusUnprocessableEntity, "slug is required")
 		return
 	}
+	if body.Slug == s.authz.Options.WildcardRoleSlug {
+		writeErr(w, http.StatusConflict, errReservedSlug.Error())
+		return
+	}
 	if err := s.store.CreateRole(r.Context(), ws.ID, body.Slug, body.Name); err != nil {
 		writeErr(w, http.StatusConflict, err.Error())
 		return
@@ -308,8 +316,12 @@ func (s *server) setRolePermission(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "role not found")
 		return
 	}
-	// A role-definition change affects every holder → flush the cache.
-	s.flushAll()
+	// A role-definition change affects every holder. A failed flush is a 500:
+	// the write landed, but leaving the cache silently stale is the defect.
+	if err := s.authz.Flush(r.Context()); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"slug": slug, "codename": body.Codename, "allow": body.Allow})
 }
 
@@ -326,9 +338,31 @@ func (s *server) assignRole(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "member or role not found")
 		return
 	}
-	// Membership change affects that member only → drop their entry.
-	s.authz.Invalidate(r.Context(), s.authz.Key(ws.ID, userID))
+	if err := s.authz.Invalidate(r.Context(), s.authz.Key(ws.ID, userID)); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"userId": userID, "slug": slug})
+}
+
+func (s *server) unassignRole(w http.ResponseWriter, r *http.Request) {
+	ws, _ := workspaceFrom(r.Context())
+	userID, _ := strconv.ParseInt(gochi.URLParam(r, "userId"), 10, 64)
+	slug := gochi.URLParam(r, "slug")
+	ok, err := s.store.UnassignRole(r.Context(), ws.ID, userID, slug)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusNotFound, "member or role not found")
+		return
+	}
+	if err := s.authz.Invalidate(r.Context(), s.authz.Key(ws.ID, userID)); err != nil {
+		writeErr(w, http.StatusInternalServerError, "internal error")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"userId": userID, "slug": slug, "assigned": false})
 }
 
 // ---- small helpers ----

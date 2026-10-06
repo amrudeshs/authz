@@ -7,6 +7,18 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: authz
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -15,6 +27,9 @@ jobs:
       - name: vet
         run: go vet ./...
       - name: test
+        env:
+          DATABASE_URL: postgres://postgres:authz@localhost:5432/postgres
+          REQUIRE_POSTGRES: "1"
         run: go test ./...
       - name: generated code is current
         run: |

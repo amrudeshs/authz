@@ -5,7 +5,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -86,6 +88,11 @@ func TestFunctionLevelDenialAndWildcard(t *testing.T) {
 	if got := do(t, h, "DELETE", "/projects/1", "owner-acme", "acme", nil).Code; got != http.StatusOK {
 		t.Fatalf("owner deleteProject = %d, want 200", got)
 	}
+	// Second call is a cache hit. 404 means the gate still treated the owner
+	// as a wildcard; 403 would mean the cached set lost the flag.
+	if got := do(t, h, "DELETE", "/projects/999", "owner-acme", "acme", nil).Code; got != http.StatusNotFound {
+		t.Fatalf("cached owner delete = %d, want 404 (gate passed)", got)
+	}
 }
 
 func TestSystemRoleImmutability(t *testing.T) {
@@ -106,6 +113,10 @@ func TestWildcardNeedsNoSeed(t *testing.T) {
 		map[string]string{"slug": "auditor", "name": "Auditor"}).Code; got != http.StatusCreated {
 		t.Fatalf("wildcard createRole = %d, want 201", got)
 	}
+	if got := do(t, h, "POST", "/roles", "owner-acme", "acme",
+		map[string]string{"slug": "owner", "name": "Not the admin"}).Code; got != http.StatusConflict {
+		t.Fatalf("create reserved slug = %d, want 409", got)
+	}
 }
 
 func TestDataLevelWorkspaceScoping(t *testing.T) {
@@ -120,11 +131,8 @@ func TestDataLevelWorkspaceScoping(t *testing.T) {
 func TestRoleLifecycleAndCacheInvalidation(t *testing.T) {
 	h := newTestServer()
 
-	// member cannot create a project to start with.
-	if got := do(t, h, "POST", "/projects", "member-acme", "acme", map[string]string{"name": "N"}).Code; got != http.StatusForbidden {
-		t.Fatalf("pre-grant = %d, want 403", got)
-	}
-	// owner creates a custom role, grants createProject, assigns it.
+	// Create and grant before the member's first request, so the later
+	// assign is the only invalidation of the member's cached denial.
 	if got := do(t, h, "POST", "/roles", "owner-acme", "acme", map[string]string{"slug": "manager", "name": "Manager"}).Code; got != http.StatusCreated {
 		t.Fatalf("createRole = %d, want 201", got)
 	}
@@ -132,12 +140,52 @@ func TestRoleLifecycleAndCacheInvalidation(t *testing.T) {
 		map[string]any{"codename": "createProject", "allow": true}).Code; got != http.StatusOK {
 		t.Fatalf("setRolePermission = %d, want 200", got)
 	}
+	if got := do(t, h, "POST", "/projects", "member-acme", "acme", map[string]string{"name": "N"}).Code; got != http.StatusForbidden {
+		t.Fatalf("pre-grant = %d, want 403", got)
+	}
 	if got := do(t, h, "POST", "/members/3/roles/manager", "owner-acme", "acme", nil).Code; got != http.StatusOK {
 		t.Fatalf("assignRole = %d, want 200", got)
 	}
-	// The member now holds the new capability (cache invalidated on assign).
 	if got := do(t, h, "POST", "/projects", "member-acme", "acme", map[string]string{"name": "After grant"}).Code; got != http.StatusCreated {
 		t.Fatalf("post-grant = %d, want 201", got)
+	}
+	if got := do(t, h, "DELETE", "/members/3/roles/manager", "owner-acme", "acme", nil).Code; got != http.StatusOK {
+		t.Fatalf("unassignRole = %d, want 200", got)
+	}
+	if got := do(t, h, "POST", "/projects", "member-acme", "acme", map[string]string{"name": "After revoke"}).Code; got != http.StatusForbidden {
+		t.Fatalf("post-revoke = %d, want 403", got)
+	}
+}
+
+type failLookupStore struct {
+	Store
+	tokenErr error
+	wsErr    error
+}
+
+func (s failLookupStore) UserByToken(ctx context.Context, token string) (User, bool, error) {
+	if s.tokenErr != nil {
+		return User{}, false, s.tokenErr
+	}
+	return s.Store.UserByToken(ctx, token)
+}
+
+func (s failLookupStore) WorkspaceBySlug(ctx context.Context, slug string) (Workspace, bool, error) {
+	if s.wsErr != nil {
+		return Workspace{}, false, s.wsErr
+	}
+	return s.Store.WorkspaceBySlug(ctx, slug)
+}
+
+func TestLookupErrorsAre500(t *testing.T) {
+	boom := errors.New("db down")
+	tokenDown := newServer(failLookupStore{Store: newMemStore(), tokenErr: boom}).router()
+	if got := do(t, tokenDown, "GET", "/projects", "member-acme", "acme", nil).Code; got != http.StatusInternalServerError {
+		t.Fatalf("token lookup error = %d, want 500", got)
+	}
+	wsDown := newServer(failLookupStore{Store: newMemStore(), wsErr: boom}).router()
+	if got := do(t, wsDown, "GET", "/projects", "member-acme", "acme", nil).Code; got != http.StatusInternalServerError {
+		t.Fatalf("workspace lookup error = %d, want 500", got)
 	}
 }
 

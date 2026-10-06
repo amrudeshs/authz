@@ -57,12 +57,8 @@ func newMemStore() *memStore {
 		nextTask: 3,
 	}
 	for _, ws := range []int64{1, 2} {
-		s.roles[ws] = map[string]*memRole{
-			"owner": {name: "Owner", system: true, perms: map[string]bool{}},
-		}
-	}
-	for slug, codenames := range RoleSeed {
-		for ws := range s.roles {
+		s.roles[ws] = map[string]*memRole{}
+		for slug, codenames := range RoleSeed {
 			p := map[string]bool{}
 			for _, c := range codenames {
 				p[c] = true
@@ -268,5 +264,31 @@ func (s *memStore) AssignRole(_ context.Context, workspaceID, userID int64, slug
 		}
 	}
 	s.userRole[workspaceID][userID] = append(cur, slug)
+	return true, nil
+}
+
+func (s *memStore) UnassignRole(_ context.Context, workspaceID, userID int64, slug string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.members[workspaceID][userID] {
+		return false, nil
+	}
+	if _, ok := s.roles[workspaceID][slug]; !ok {
+		return false, nil
+	}
+	cur := s.userRole[workspaceID][userID]
+	next := make([]string, 0, len(cur))
+	found := false
+	for _, held := range cur {
+		if held == slug {
+			found = true
+			continue
+		}
+		next = append(next, held)
+	}
+	if !found {
+		return false, nil
+	}
+	s.userRole[workspaceID][userID] = next
 	return true, nil
 }

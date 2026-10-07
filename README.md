@@ -15,9 +15,9 @@ to `Has`.
 
 ## Why
 
-Go has no standard permission model (the kind a batteries-included web
-framework auto-generates: per-object `add/change/delete/view` permissions,
-bundled into groups, resolved per user). The common Go answer evaluates
+Go has no standard permission model (the kind Django auto-generates:
+per-model `add/change/delete/view` permissions, bundled into groups,
+resolved per user). The common Go answer evaluates
 policies **in memory**. That is a good fit for a route guard. It is a poor
 fit for "list everything I may see" if the service pulls every candidate row
 into the process only to discard most of them.
@@ -170,6 +170,7 @@ a 500, not a success with a stale gate.
 | `example/` | A runnable multi-tenant "Projects & Tasks" service. |
 | `docs/redis-support-plan.md` | Proposed plan for a Redis-backed shared cache (not implemented yet). |
 | `docs/testing-plan.md` | Proposed plan for interface conformance suites and CI test hardening. |
+| `docs/data-level-plan.md` | Proposed plan for data-level authorization as a host layer (not implemented). |
 
 ## What stays host-side
 
@@ -180,7 +181,9 @@ hierarchies), and audit logging.
 ## Non-goals
 
 Row-level security inside PostgreSQL, data-level layers, audit-log storage,
-and identity/session management.
+and identity/session management. Data-level authorization (ownership, explicit
+grants, supervision hierarchies) stays host-side; `docs/data-level-plan.md`
+records how a host composes it with this layer.
 
 ## Example
 

@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package authz implements the function-level permission layer of a
-// multi-tenant RBAC design: permission codenames form a static vocabulary;
-// roles are tenant data bundling codenames; members hold roles via their
-// membership.
+// multi-tenant RBAC design (Django-style roles and permissions): permission
+// codenames form a static vocabulary; roles are tenant data bundling
+// codenames; members hold roles via their membership.
 //
 // The package is intentionally dependency-free (no storage, no cache, no
 // framework imports): storage is the Resolver interface, caching the Cache

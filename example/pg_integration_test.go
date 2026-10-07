@@ -252,6 +252,12 @@ func TestPostgresSeedAndConstraints(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer conn.Close(ctx)
+		// rebuildDB resets public; the shadow schema is this test's own
+		// artifact, so clear it here or a second run on the same database
+		// fails on CREATE SCHEMA evil.
+		if _, err := conn.Exec(ctx, `DROP SCHEMA IF EXISTS evil CASCADE`); err != nil {
+			t.Fatal(err)
+		}
 		if _, err := conn.Exec(ctx, `
 			CREATE SCHEMA evil;
 			CREATE TABLE evil.roles (id int);
@@ -318,6 +324,20 @@ func TestPostgresNewTenantIsSeeded(t *testing.T) {
 	}
 	if ownerGrants != 0 {
 		t.Fatalf("seeded owner grants = %d, want 0", ownerGrants)
+	}
+
+	// A multi-row INSERT fires the row-scoped trigger once per tenant and
+	// seeds each from the stored matrix.
+	if _, err := pool.Exec(ctx, `
+		INSERT INTO tenants (slug, name)
+		VALUES ('umbrella', 'Umbrella'), ('stark', 'Stark')`); err != nil {
+		t.Fatal(err)
+	}
+	if got := mustCount(t, pool, `
+		SELECT count(*) FROM roles r
+		JOIN tenants t ON t.id = r.tenant_id
+		WHERE t.slug IN ('umbrella', 'stark') AND r.is_system AND r.deleted_at IS NULL`); got != 6 {
+		t.Fatalf("system roles for tenants inserted together = %d, want 6", got)
 	}
 }
 

@@ -114,8 +114,9 @@ Semantics that make the model robust:
 idempotent, re-invocable system-role matrix seed. A re-run replaces the
 grants of every active system role with exactly the matrix; slugs dropped
 from the payload keep their role row and lose their grants. The matrix is
-stored, and a later `INSERT` into `tenants` re-runs it, so a tenant created
-after the first seed gets the same system roles. Include the wildcard role
+stored, and a trigger seeds a newly inserted tenant from it, touching only
+that tenant's rows; tenants created before the first seed are brought in
+line when the host calls the function. Include the wildcard role
 with an empty array so its row exists for membership binding. `x-role-seed`
 is that matrix, including the wildcard slug — the example checks
 `seed.sql` against the generated `RoleSeed`.

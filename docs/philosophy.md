@@ -81,8 +81,9 @@ not need that re-seed, and they do not need to wait out the TTL.
 Role-definition edits are data changes: they must `Flush` cached sets. The
 seed function is idempotent. A re-run replaces active system-role grants with
 exactly the matrix; a slug removed from the matrix keeps its role row and
-loses its grants. After the first call, inserting a tenant re-runs the stored
-matrix, so new tenants are not invisible until someone remembers.
+loses its grants. After the first call, inserting a tenant seeds that tenant
+from the stored matrix, so new tenants are not invisible until someone
+remembers.
 
 ## What this layer is not
 

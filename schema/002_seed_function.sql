@@ -20,10 +20,11 @@
 -- so its row exists for membership binding; the wildcard grant itself is a
 -- process option (Options.WildcardRoleSlug), not a row in role_permissions.
 --
--- The matrix is stored. A later INSERT into tenants re-runs the function, so
--- a tenant created after the first seed gets the same system roles. An
--- insert that happens before any seed is a no-op until the host calls the
--- function.
+-- The matrix is stored. A trigger seeds a newly inserted tenant from that
+-- stored matrix, so a tenant created after the first seed gets the same
+-- system roles; only the new tenant's rows are written. A tenant that
+-- existed before the first seed is brought in line when the host calls this
+-- function, not by the trigger.
 --
 -- search_path is pinned so unqualified names cannot follow the caller's
 -- path. The function is invoker-rights: EXECUTE for PUBLIC is the PostgreSQL
@@ -38,7 +39,16 @@ CREATE TABLE IF NOT EXISTS authz_role_seed (
     seed JSONB NOT NULL
 );
 
-CREATE OR REPLACE FUNCTION seed_role_permissions(seed jsonb)
+-- Seed one tenant's system roles from a matrix. This is the single writer
+-- used by both seed_role_permissions and the new-tenant trigger, so the two
+-- paths cannot drift. It sets the transaction-local authz.seeding flag the
+-- guard triggers check.
+--
+-- Only p_tenant_id's rows are touched: the tenant's active system grants
+-- become exactly the matrix, and a slug dropped from the matrix keeps its
+-- role row while losing its grants. Other tenants are not read or locked,
+-- so a tenant insert does not rewrite the whole role_permissions table.
+CREATE OR REPLACE FUNCTION authz_seed_tenant(p_tenant_id bigint, seed jsonb)
 RETURNS void
 LANGUAGE plpgsql
 SET search_path = pg_catalog, public
@@ -48,24 +58,22 @@ BEGIN
     -- through and rejects every other writer.
     PERFORM set_config('authz.seeding', 'on', true);
 
-    INSERT INTO authz_role_seed (id, seed) VALUES (1, seed)
-    ON CONFLICT (id) DO UPDATE SET seed = EXCLUDED.seed;
-
-    -- 1. Ensure an active system-role row per tenant for every seeded slug.
+    -- 1. Ensure an active system-role row for every seeded slug.
     INSERT INTO roles (tenant_id, slug, name, is_system)
-    SELECT t.id, s.slug, initcap(s.slug), true
-    FROM tenants t
-    CROSS JOIN LATERAL jsonb_object_keys(seed) AS s(slug)
+    SELECT p_tenant_id, s.slug, initcap(s.slug), true
+    FROM jsonb_object_keys(seed) AS s(slug)
     WHERE NOT EXISTS (
         SELECT 1 FROM roles r
-        WHERE r.tenant_id = t.id AND r.slug = s.slug AND r.deleted_at IS NULL
+        WHERE r.tenant_id = p_tenant_id
+          AND r.slug = s.slug
+          AND r.deleted_at IS NULL
     );
 
-    -- 2. Active system-role grants become exactly the matrix. Slugs no
-    -- longer in the payload lose their grants; their role row stays.
+    -- 2. This tenant's active system-role grants become exactly the matrix.
     DELETE FROM role_permissions rp
     USING roles r
     WHERE rp.role_id = r.id
+      AND r.tenant_id = p_tenant_id
       AND r.is_system
       AND r.deleted_at IS NULL;
 
@@ -73,9 +81,31 @@ BEGIN
     SELECT r.id, c.codename
     FROM roles r
     CROSS JOIN LATERAL jsonb_array_elements_text(seed -> r.slug) AS c(codename)
-    WHERE r.is_system
+    WHERE r.tenant_id = p_tenant_id
+      AND r.is_system
       AND r.deleted_at IS NULL
       AND seed ? r.slug;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION seed_role_permissions(seed jsonb)
+RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, public
+AS $$
+DECLARE
+    v_tenant bigint;
+BEGIN
+    -- Remember the matrix so the new-tenant trigger can replay it.
+    INSERT INTO authz_role_seed (id, seed) VALUES (1, seed)
+    ON CONFLICT (id) DO UPDATE SET seed = EXCLUDED.seed;
+
+    -- Re-apply to every tenant, one tenant at a time. Tenants created before
+    -- the first seed are brought in line here; later tenants are handled by
+    -- the trigger.
+    FOR v_tenant IN SELECT id FROM tenants LOOP
+        PERFORM authz_seed_tenant(v_tenant, seed);
+    END LOOP;
 END;
 $$;
 
@@ -157,7 +187,8 @@ CREATE TRIGGER roles_system_guard
     FOR EACH ROW
     EXECUTE FUNCTION authz_reject_system_role_row_write();
 
--- After the matrix has been stored, a new tenant gets the same system roles.
+-- Seed the tenant that was just created, from the stored matrix. Row-scoped:
+-- only the new tenant's roles and grants are written.
 CREATE OR REPLACE FUNCTION authz_seed_new_tenant()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -170,7 +201,7 @@ BEGIN
     IF matrix IS NULL THEN
         RETURN NULL;
     END IF;
-    PERFORM seed_role_permissions(matrix);
+    PERFORM authz_seed_tenant(NEW.id, matrix);
     RETURN NULL;
 END;
 $$;
@@ -178,5 +209,5 @@ $$;
 DROP TRIGGER IF EXISTS tenants_seed_roles ON tenants;
 CREATE TRIGGER tenants_seed_roles
     AFTER INSERT ON tenants
-    FOR EACH STATEMENT
+    FOR EACH ROW
     EXECUTE FUNCTION authz_seed_new_tenant();

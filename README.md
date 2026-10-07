@@ -47,7 +47,7 @@ core owns no I/O.
 | `Resolver` (interface) | Host storage: `RoleSlugs(ctx, tenantID, userID)` and `PermissionCodenames(ctx, tenantID, slugs)`. Implementations must scope every query to `tenantID`. The core cannot check that. |
 | `Options{WildcardRoleSlug}` | Members holding this slug pass every check. Empty disables wildcarding. Reserve the slug; do not let `CreateRole` mint it. |
 | `Resolve(...)` | Pure resolution: slugs → (wildcard ? full vocabulary : codename union). |
-| `Cache` (interface) | `Get/Set/Del/Flush` over opaque bytes. Mutations return errors. Wire to Redis, an LRU, or nothing. |
+| `Cache` (interface) | `Get/Set/Del/Flush` over opaque bytes. Mutations return errors. Wire to Redis, an LRU, or nothing — see `docs/redis-support-plan.md` for the Redis path. |
 | `CachedResolver` | Decorator with `ResolveFor`, `Resolve`, `Invalidate`, `Flush`. |
 
 Rules:
@@ -168,6 +168,7 @@ a 500, not a success with a stale gate.
 | `chi/` | The chi router adapter (the core stays framework-free). |
 | `cache/` | An in-memory `authz.Cache` (Redis is the host's choice for multi-instance). |
 | `example/` | A runnable multi-tenant "Projects & Tasks" service. |
+| `docs/redis-support-plan.md` | Proposed plan for a Redis-backed shared cache (not implemented yet). |
 
 ## What stays host-side
 

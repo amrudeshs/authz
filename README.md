@@ -169,6 +169,7 @@ a 500, not a success with a stale gate.
 | `cache/` | An in-memory `authz.Cache` (Redis is the host's choice for multi-instance). |
 | `example/` | A runnable multi-tenant "Projects & Tasks" service. |
 | `docs/redis-support-plan.md` | Proposed plan for a Redis-backed shared cache (not implemented yet). |
+| `docs/testing-plan.md` | Proposed plan for interface conformance suites and CI test hardening. |
 
 ## What stays host-side
 
@@ -220,6 +221,10 @@ docker network rm authz-test
 
 The test process retries the database for 30 seconds, so Postgres does not
 have to be ready before `go test` starts.
+
+`docs/testing-plan.md` tracks the missing pieces: reusable conformance suites
+for `authz.Cache` and `authz.Resolver`, a reusable chi resolver contract, a
+`permgen` golden test, and running the suite under `-race` in CI.
 
 ## License
 
